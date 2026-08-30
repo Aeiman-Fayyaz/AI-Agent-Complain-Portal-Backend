@@ -1,170 +1,95 @@
-require("dotenv").config();
+const dotenv = require('dotenv');
+dotenv.config();
 
-const express = require("express");
-const http = require("http");
-const cors = require("cors");
-const { Server } = require("socket.io");
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
 
-const connectDB = require("./config/db");
-const socketHandler = require("./sockets/socketHandler");
+const connectDB = require('./config/db');
+const authRoutes = require('./routes/authRoutes');
+const ticketRoutes = require('./routes/ticketRoutes');
+const messageRoutes = require('./routes/messageRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
+const socketHandler = require('./sockets/socketHandler');
 
-const authRoutes = require("./routes/authRoutes");
-const ticketRoutes = require("./routes/ticketRoutes");
-const messageRoutes = require("./routes/messageRoutes");
-const dashboardRoutes = require("./routes/dashboardRoutes");
-
-const app = express();
-
-// =====================================================
-// Configuration
-// =====================================================
-
-const PORT = process.env.PORT || 5500;
-
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
-
-// =====================================================
-// HTTP Server
-// =====================================================
-
-const server = http.createServer(app);
-
-// =====================================================
-// Socket.IO
-// =====================================================
-
-const io = new Server(server, {
-  cors: {
-    origin: CLIENT_URL,
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    credentials: true,
-  },
-});
-
-app.set("io", io);
-
-// Initialize socket handlers
-socketHandler(io);
-
-// =====================================================
-// Database
-// =====================================================
-
+// Connect to MongoDB Database
 connectDB();
 
-// =====================================================
+const app = express();
+const server = http.createServer(app);
+
+// Configure CORS for Express
+app.use(cors({
+  origin: true, // Dynamically allow any requesting origin (local 5173, 5174, Vercel domains, etc.)
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
+// Configure Socket.IO Server with permissive CORS and fallback transports
+const io = new Server(server, {
+  cors: {
+    origin: '*', // Allow all origins for Socket.IO
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true
+  },
+  transports: ['polling', 'websocket'], // Try HTTP polling first then upgrade to WebSocket for maximum compatibility
+  allowEIO3: true
+});
+
+// Store io instance in express app for access inside controllers
+app.set('io', io);
+
+// Initialize Socket.IO handlers
+socketHandler(io);
+
 // Middleware
-// =====================================================
-
-app.use(
-  cors({
-    origin: CLIENT_URL,
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    credentials: true,
-  })
-);
-
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// =====================================================
-// Request Logger
-// =====================================================
-
+// Log requests
 app.use((req, res, next) => {
   console.log(`[HTTP] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// =====================================================
-// Routes
-// =====================================================
+// Mount Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/tickets', ticketRoutes);
+app.use('/api/tickets/:id/messages', messageRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
-app.use("/api/auth", authRoutes);
-
-app.use("/api/tickets", ticketRoutes);
-
-app.use("/api/tickets/:id/messages", messageRoutes);
-
-app.use("/api/dashboard", dashboardRoutes);
-
-// =====================================================
-// Health Check
-// =====================================================
-
-app.get("/api/health", (req, res) => {
-  res.status(200).json({
-    success: true,
-    status: "ok",
-    system: "AI-Powered Customer Support Ticketing API",
-    timestamp: new Date().toISOString(),
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    system: 'AI-Powered Customer Support Ticketing API',
+    timestamp: new Date().toISOString()
   });
 });
 
-// =====================================================
-// Root Route
-// =====================================================
-
-app.get("/", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Support Ticket Backend API is running",
-  });
+// 404 Route handler
+app.use((req, res, next) => {
+  res.status(404).json({ success: false, message: `Route not found - ${req.originalUrl}` });
 });
 
-// =====================================================
-// 404 Handler
-// =====================================================
-
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Route not found - ${req.originalUrl}`,
-  });
-});
-
-// =====================================================
 // Global Error Handler
-// =====================================================
-
 app.use((err, req, res, next) => {
-  console.error("[Unhandled Server Error]", err);
-
+  console.error('[Unhandled Server Error]', err.stack);
   res.status(err.statusCode || 500).json({
     success: false,
-    message: err.message || "Internal Server Error",
+    message: err.message || 'Internal Server Error'
   });
 });
 
-// =====================================================
-// Local Server
-// =====================================================
+const PORT = process.env.PORT || 5000;
 
-if (require.main === module) {
-  server.listen(PORT, () => {
-    console.log("=======================================================");
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🌐 http://localhost:${PORT}`);
-    console.log(`❤️  Health: http://localhost:${PORT}/api/health`);
-    console.log("📡 Socket.IO initialized");
-    console.log("=======================================================");
-  });
-
-  server.on("error", (error) => {
-    if (error.code === "EADDRINUSE") {
-      console.error(
-        `❌ Port ${PORT} is already in use. Stop the existing process or use another PORT.`
-      );
-      process.exit(1);
-    }
-
-    console.error("❌ Server Error:", error);
-    process.exit(1);
-  });
-}
-
-// =====================================================
-// Export
-// =====================================================
+server.listen(PORT, () => {
+  console.log(`=======================================================`);
+  console.log(`🚀 Support Ticket Backend Server running on port ${PORT}`);
+  console.log(`📡 Socket.IO Real-time Engine initialized`);
+  console.log(`=======================================================`);
+});
 
 module.exports = app;
