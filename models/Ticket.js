@@ -35,8 +35,13 @@ const ticketSchema = new mongoose.Schema(
     },
     priority: {
       type: String,
-      enum: ['Low', 'Medium', 'High'],
+      enum: ['Low', 'Medium', 'High', 'Critical'],
       default: 'Medium'
+    },
+    sentiment: {
+      type: String,
+      enum: ['Positive', 'Neutral', 'Frustrated', 'Angry', 'Negative', 'Urgent'],
+      default: 'Neutral'
     },
     aiSummary: {
       type: String,
@@ -45,7 +50,8 @@ const ticketSchema = new mongoose.Schema(
     aiSuggestions: {
       category: { type: String, default: 'General' },
       priority: { type: String, default: 'Medium' },
-      summary: { type: String, default: '' }
+      summary: { type: String, default: '' },
+      sentiment: { type: String, default: 'Neutral' }
     },
     isAiApproved: {
       type: Boolean,
@@ -59,6 +65,10 @@ const ticketSchema = new mongoose.Schema(
     resolutionNote: {
       type: String,
       default: ''
+    },
+    resolvedAt: {
+      type: Date,
+      default: null
     }
   },
   {

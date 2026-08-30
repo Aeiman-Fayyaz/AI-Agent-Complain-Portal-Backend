@@ -1,13 +1,67 @@
 const Ticket = require('../models/Ticket');
 const Message = require('../models/Message');
 const User = require('../models/User');
-const { triageTicket } = require('../services/aiService');
+const { triageTicket, detectDuplicateComplaint } = require('../services/aiService');
+const { createTicketNotification } = require('../services/notificationService');
 
 // Helper to generate next unique Ticket Number (e.g., TCK-1001)
 const generateTicketNumber = async () => {
   const count = await Ticket.countDocuments();
   const nextNum = 1000 + count + 1;
   return `TCK-${nextNum}`;
+};
+
+const checkDuplicateTicket = async (req, res) => {
+  try {
+    const { subject, description } = req.body;
+
+    if (!subject || !description || !subject.trim() || !description.trim()) {
+      return res.status(400).json({ success: false, message: 'Please provide both subject and description' });
+    }
+
+    const tickets = await Ticket.find({ customer: req.user._id })
+      .select('ticketNumber subject description category status aiSummary createdAt')
+      .sort({ createdAt: -1 })
+      .limit(30);
+
+    let bestMatch = null;
+
+    for (const ticket of tickets) {
+      const currentText = `${subject} ${description}`;
+      const historicalText = `${ticket.subject || ''} ${ticket.description || ''} ${ticket.aiSummary || ''}`;
+      const result = await detectDuplicateComplaint(subject, description, historicalText);
+
+      if (result.isDuplicate && (!bestMatch || result.score > bestMatch.score)) {
+        bestMatch = {
+          ticketNumber: ticket.ticketNumber,
+          status: ticket.status,
+          category: ticket.category,
+          summary: ticket.aiSummary || ticket.subject,
+          score: result.score,
+          reason: result.reason
+        };
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        isDuplicate: Boolean(bestMatch),
+        match: bestMatch,
+        threshold: 0.58
+      }
+    });
+  } catch (error) {
+    console.error('[Ticket Controller Duplicate Check Error]', error);
+    res.json({
+      success: true,
+      data: {
+        isDuplicate: false,
+        match: null,
+        threshold: 0.58
+      }
+    });
+  }
 };
 
 // @desc    Create a new support ticket (Customer)
@@ -37,11 +91,13 @@ const createTicket = async (req, res) => {
       description,
       category: finalCategory,
       priority: aiResult.priority,
+      sentiment: aiResult.sentiment || 'Neutral',
       aiSummary: aiResult.summary,
       aiSuggestions: {
         category: aiResult.category,
         priority: aiResult.priority,
-        summary: aiResult.summary
+        summary: aiResult.summary,
+        sentiment: aiResult.sentiment || 'Neutral'
       },
       isAiApproved: false,
       status: 'New'
@@ -149,7 +205,7 @@ const getTicketById = async (req, res) => {
 // @access  Private (Agent/Admin)
 const updateTicket = async (req, res) => {
   try {
-    const { status, category, priority, aiSummary, assignedAgentId, resolutionNote, isAiApproved } = req.body;
+    const { status, category, priority, aiSummary, assignedAgentId, resolutionNote, isAiApproved, sentiment } = req.body;
 
     let ticket = await Ticket.findById(req.params.id);
 
@@ -157,12 +213,19 @@ const updateTicket = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
 
-    // Customer security rule: Customers cannot patch ticket status/AI triage directly
     if (req.user.role === 'customer') {
       return res.status(403).json({ success: false, message: 'Customers are not authorized to update ticket properties' });
     }
 
-    // Business rule validation: Cannot resolve without a resolution note
+    const previousStatus = ticket.status;
+    const previousAssignedAgent = ticket.assignedAgent ? ticket.assignedAgent.toString() : null;
+    const previousResolvedStatus = !!ticket.resolvedAt;
+
+    if (sentiment !== undefined) {
+      const validSentiments = ['Positive', 'Neutral', 'Frustrated', 'Angry', 'Negative', 'Urgent'];
+      ticket.sentiment = validSentiments.includes(sentiment) ? sentiment : ticket.sentiment;
+    }
+
     if (status === 'Resolved') {
       const noteToValidate = resolutionNote !== undefined ? resolutionNote : ticket.resolutionNote;
       if (!noteToValidate || !noteToValidate.trim()) {
@@ -173,7 +236,6 @@ const updateTicket = async (req, res) => {
       }
     }
 
-    // Workflow state updates
     if (category) ticket.category = category;
     if (priority) ticket.priority = priority;
     if (aiSummary !== undefined) ticket.aiSummary = aiSummary;
@@ -184,13 +246,11 @@ const updateTicket = async (req, res) => {
       const agentUser = await User.findById(assignedAgentId);
       if (agentUser && (agentUser.role === 'agent' || agentUser.role === 'admin')) {
         ticket.assignedAgent = agentUser._id;
-        // Auto transition New -> Assigned if unassigned
         if (ticket.status === 'New') {
           ticket.status = 'Assigned';
         }
       }
     } else if (req.user.role === 'agent' && !ticket.assignedAgent) {
-      // Auto-assign to current acting agent if unassigned
       ticket.assignedAgent = req.user._id;
       if (ticket.status === 'New') {
         ticket.status = 'Assigned';
@@ -199,20 +259,52 @@ const updateTicket = async (req, res) => {
 
     if (status) {
       ticket.status = status;
+      if (status === 'Resolved') {
+        ticket.resolvedAt = ticket.resolvedAt || new Date();
+      } else if (status !== 'Resolved') {
+        ticket.resolvedAt = null;
+      }
     }
 
     await ticket.save();
+
+    const ticketOwnerId = ticket.customer ? ticket.customer.toString() : null;
+    if (ticketOwnerId) {
+      if (assignedAgentId || (req.user.role === 'agent' && !previousAssignedAgent && ticket.assignedAgent && ticket.assignedAgent.toString() !== previousAssignedAgent)) {
+        await createTicketNotification({
+          userId: ticketOwnerId,
+          ticket: ticket._id,
+          type: 'assignment',
+          message: 'Your complaint has been assigned to an agent.'
+        });
+      }
+
+      if (status && status === 'In Progress' && previousStatus !== 'In Progress') {
+        await createTicketNotification({
+          userId: ticketOwnerId,
+          ticket: ticket._id,
+          type: 'status',
+          message: 'Your complaint is now under review.'
+        });
+      }
+
+      if (status && status === 'Resolved' && !previousResolvedStatus) {
+        await createTicketNotification({
+          userId: ticketOwnerId,
+          ticket: ticket._id,
+          type: 'resolved',
+          message: 'Your complaint has been resolved.'
+        });
+      }
+    }
 
     const updatedTicket = await Ticket.findById(ticket._id)
       .populate('customer', 'name email role')
       .populate('assignedAgent', 'name email role');
 
-    // Socket.IO real-time emission
     const io = req.app.get('io');
     if (io) {
-      // Emit to ticket specific room
       io.to(`ticket:${ticket._id}`).emit('ticket_updated', updatedTicket);
-      // Emit to agent dashboard
       io.to('agent_dashboard').emit('ticket_updated', updatedTicket);
     }
 
@@ -228,6 +320,7 @@ const updateTicket = async (req, res) => {
 };
 
 module.exports = {
+  checkDuplicateTicket,
   createTicket,
   getTickets,
   getTicketById,

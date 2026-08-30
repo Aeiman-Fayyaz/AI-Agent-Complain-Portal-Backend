@@ -1,5 +1,6 @@
 const Message = require('../models/Message');
 const Ticket = require('../models/Ticket');
+const { createTicketNotification } = require('../services/notificationService');
 
 // @desc    Add a message/reply to a ticket conversation
 // @route   POST /api/tickets/:id/messages
@@ -32,11 +33,21 @@ const createMessage = async (req, res) => {
 
     // Auto-update ticket status to 'In Progress' if agent/admin replies and status was New/Assigned
     if ((req.user.role === 'agent' || req.user.role === 'admin') && ['New', 'Assigned'].includes(ticket.status)) {
+      const previousStatus = ticket.status;
       ticket.status = 'In Progress';
       if (!ticket.assignedAgent) {
         ticket.assignedAgent = req.user._id;
       }
       await ticket.save();
+
+      if (ticket.customer && previousStatus !== 'In Progress') {
+        await createTicketNotification({
+          userId: ticket.customer,
+          ticket: ticket._id,
+          type: 'status',
+          message: 'Your complaint is now under review.'
+        });
+      }
     }
 
     const populatedMessage = await Message.findById(message._id).populate('sender', 'name email role');
