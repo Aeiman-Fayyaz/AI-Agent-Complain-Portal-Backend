@@ -76,9 +76,13 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-  console.log(`=======================================================`);
-  console.log(`🚀 Support Ticket Backend Server running on port ${PORT}`);
-  console.log(`📡 Socket.IO Real-time Engine initialized`);
-  console.log(`=======================================================`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`=======================================================`);
+    console.log(`🚀 Support Ticket Backend Server running on port ${PORT}`);
+    console.log(`📡 Socket.IO Real-time Engine initialized`);
+    console.log(`=======================================================`);
+  });
+}
+
+module.exports = app;
