@@ -21,7 +21,7 @@ const server = http.createServer(app);
 
 // Configure CORS for Express
 app.use(cors({
-  origin: true, // Dynamically allow any requesting origin (local 5173, 5174, Vercel domains, etc.)
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
@@ -30,11 +30,11 @@ app.use(cors({
 // Configure Socket.IO Server with permissive CORS and fallback transports
 const io = new Server(server, {
   cors: {
-    origin: '*', // Allow all origins for Socket.IO
+    origin: '*',
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true
   },
-  transports: ['polling', 'websocket'], // Try HTTP polling first then upgrade to WebSocket for maximum compatibility
+  transports: ['polling', 'websocket'],
   allowEIO3: true
 });
 
@@ -69,6 +69,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Root endpoint for Vercel backend health check
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'AI Support Ticket Backend API is running on Vercel'
+  });
+});
+
 // 404 Route handler
 app.use((req, res, next) => {
   res.status(404).json({ success: false, message: `Route not found - ${req.originalUrl}` });
@@ -85,11 +93,13 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-  console.log(`=======================================================`);
-  console.log(`🚀 Support Ticket Backend Server running on port ${PORT}`);
-  console.log(`📡 Socket.IO Real-time Engine initialized`);
-  console.log(`=======================================================`);
-});
+if (!process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`=======================================================`);
+    console.log(`🚀 Support Ticket Backend Server running on port ${PORT}`);
+    console.log(`📡 Socket.IO Real-time Engine initialized`);
+    console.log(`=======================================================`);
+  });
+}
 
 module.exports = app;
