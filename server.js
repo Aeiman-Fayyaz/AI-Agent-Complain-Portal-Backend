@@ -1,84 +1,96 @@
-const dotenv = require('dotenv');
-dotenv.config();
+require('dotenv').config();
 
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 const cors = require('cors');
 
 const connectDB = require('./config/db');
+
 const authRoutes = require('./routes/authRoutes');
 const ticketRoutes = require('./routes/ticketRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
-const socketHandler = require('./sockets/socketHandler');
-
-// Connect to MongoDB Database
-connectDB();
 
 const app = express();
-const server = http.createServer(app);
 
-// Configure Socket.IO
-const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE']
-  }
-});
+// -----------------------------
+// Database
+// -----------------------------
+connectDB();
 
-// Store io instance in express app for access inside controllers
-app.set('io', io);
-
-// Initialize Socket.IO handlers
-socketHandler(io);
-
+// -----------------------------
 // Middleware
-app.use(cors());
+// -----------------------------
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || '*',
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true
+  })
+);
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Log requests
+// -----------------------------
+// Request Logger
+// -----------------------------
 app.use((req, res, next) => {
   console.log(`[HTTP] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// Mount Routes
+// -----------------------------
+// Routes
+// -----------------------------
 app.use('/api/auth', authRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/tickets/:id/messages', messageRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 
-// Health check endpoint
+// -----------------------------
+// Health Check
+// -----------------------------
 app.get('/api/health', (req, res) => {
-  res.json({
+  res.status(200).json({
     status: 'ok',
     system: 'AI-Powered Customer Support Ticketing API',
     timestamp: new Date().toISOString()
   });
 });
 
-// 404 Route handler
-app.use((req, res, next) => {
-  res.status(404).json({ success: false, message: `Route not found - ${req.originalUrl}` });
+// -----------------------------
+// Root
+// -----------------------------
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Support Ticket Backend API is running'
+  });
 });
 
-// Global Error Handler
+// -----------------------------
+// 404
+// -----------------------------
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route not found - ${req.originalUrl}`
+  });
+});
+
+// -----------------------------
+// Error Handler
+// -----------------------------
 app.use((err, req, res, next) => {
-  console.error('[Unhandled Server Error]', err.stack);
+  console.error('[Unhandled Server Error]', err);
+
   res.status(err.statusCode || 500).json({
     success: false,
     message: err.message || 'Internal Server Error'
   });
 });
 
-const PORT = process.env.PORT || 5000;
+// IMPORTANT:
+// Do NOT call app.listen() on Vercel.
 
-server.listen(PORT, () => {
-  console.log(`=======================================================`);
-  console.log(`🚀 Support Ticket Backend Server running on port ${PORT}`);
-  console.log(`📡 Socket.IO Real-time Engine initialized`);
-  console.log(`=======================================================`);
-});
+module.exports = app;
